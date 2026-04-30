@@ -39,6 +39,35 @@ Edit `config.json`:
 - **`detailed`** (default) — all of the above plus `request_params` (temperature, max_tokens, tools, stream, etc.) and `response_metadata` (usage tokens, finish_reason)
 - **`full`** — everything in `detailed` plus the full request body for perfect replay fidelity
 
+## Sessions (Conversation Recreation)
+
+Capture, export, render, and audit conversations from the raw request log.
+
+```bash
+# List all log entries available for capture
+python sessions.py list [--log-path logs.jsonl]
+
+# Create a new session by time range
+python sessions.py create --range "2026-04-30T10:00 2026-04-30T10:30"
+
+# Create a session from specific request IDs
+python sessions.py create --ids <uuid1> <uuid2> ...
+
+# Render a session as markdown
+python sessions.py render <session_file>
+
+# Audit: request → response chain with timing
+python sessions.py audit <session_file>
+
+# Export to portable format
+python sessions.py export <session_file> --format jsonl
+python sessions.py export <session_file> --format openai
+```
+
+Sessions are stored as portable JSONL files in `sessions/`. Each session file contains a metadata header line followed by one entry per request, with full message history, responses, timing, and token counts.
+
+The `openai` export format writes individual files per entry in OpenAI assistant import format.
+
 ## Replay requests
 
 ```bash
@@ -192,3 +221,10 @@ kill $(cat /tmp/llmproxy.pid)
 ### Watch logs
 ```bash
 tail -f /tmp/llmproxy.log
+```
+
+## Config Locations:
+- OpenCode: ~/.config/opencode/config.json
+- Proxy (this project): ~/Projects/llm-tracer/config.json
+- ollama plist (not used atm...): ~/Library/LaunchAgents/ollama.keepalive.plist
+- 
