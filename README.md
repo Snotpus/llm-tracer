@@ -2,8 +2,8 @@
 
 Lightweight LLM observability proxy for local Ollama.
 
-- Proxies Ollama requests (`/api/generate`, `/api/chat`)
-- Logs payloads, token counts, latency, and responses to JSONL
+- Proxies Ollama requests (`/api/generate`, `/api/chat`, `/v1/chat/completions`)
+- Logs payloads, token counts, latency, and responses to JSONL with configurable detail
 - Replay logged requests and diff against new responses
 
 ## Install
@@ -28,21 +28,30 @@ Edit `config.json`:
 ```json
 {
     "ollama_base_url": "http://127.0.0.1:11434",
-    "log_path": "logs.jsonl"
+    "log_path": "logs.jsonl",
+    "log_detail": "detailed"
 }
 ```
+
+### Log detail levels
+
+- **`minimal`** — basic fields only: id, model, latency, raw prompt/response, token counts
+- **`detailed`** (default) — all of the above plus `request_params` (temperature, max_tokens, tools, stream, etc.) and `response_metadata` (usage tokens, finish_reason)
+- **`full`** — everything in `detailed` plus the full request body for perfect replay fidelity
 
 ## Replay requests
 
 ```bash
 python replay.py <request_id>
+python replay.py <request_id> --full   # show complete (untruncated) responses
+python replay.py <request_id> --log-path /path/to/logs.jsonl
 ```
 
-Resends a logged request to Ollama and prints a unified diff between the
-original and replayed responses. Use `--log-path` if your log file is not in
-the default location.
+Resends a logged request to Ollama using the original parameters and prints a unified diff between the original and replayed responses. The output includes a summary with latency, token counts, and finish reason. Use `--log-path` if your log file is not in the default location.
 
+Older log entries (from before `log_detail` was added) will show a warning but replay will still attempt using whatever fields are available.
 
+## Troubleshooting
 
 ### Find any python processes running fastapi/uvicorn
 ```bash
@@ -65,20 +74,20 @@ lsof -i :8000
 lsof -i :11434
 ```
 
-### See active network connections from opencode
+### See active network connections
 ```bash
-lsof -i -P -n | grep opencode
+lsof -i -P -n | grep LISTEN
 ```
 
 ### Or watch connections in real time
 ```bash
-watch -n 1 "lsof -i -P -n | grep opencode"
+watch -n 1 "lsof -i -P -n | grep LISTEN"
 ```
 
 ### Is your proxy responding at all?
 ```bash
-curl -s http://localhost:8000/  # or whatever port you're using
-curl -s http://localhost:8000/health
+curl -s http://localhost:8000/
+curl -s http://localhost:8000/v1/models
 ```
 
 ### Test if ollama itself is reachable directly
@@ -86,21 +95,24 @@ curl -s http://localhost:8000/health
 curl -s http://localhost:11434/api/tags
 ```
 
-
 ### Run your proxy with output visible
 ```bash
 uvicorn main:app --host 0.0.0.0 --port 8000 --log-level debug
 ```
 
-### Watch:
+### Watch logs live
 ```bash
-tail -f /tmp/llmproxy.log    # watch logs live
+tail -f /tmp/llmproxy.log
 lsof -i :8000                # is it actually listening?
 ps aux | grep uvicorn        # is the process alive?
 ```
 
-## launchd + plist example:
-`~/Library/LaunchAgents/com.yourname.llmproxy.plist`
+## Persistent deployment
+
+### launchd + plist example
+
+Create `~/Library/LaunchAgents/com.yourname.llmproxy.plist`:
+
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -158,8 +170,7 @@ tail -f /tmp/llmproxy.log
 tail -f /tmp/llmproxy.err
 ```
 
-## `nohup` example
-Run with 
+### nohup example
 ```bash
 nohup uvicorn main:app --host 0.0.0.0 --port 8000 --log-level debug \
   > /tmp/llmproxy.log 2>&1 &
@@ -169,10 +180,15 @@ echo $! > /tmp/llmproxy.pid
 ```
 
 ### Check if it's running
+```bash
 ps aux | grep uvicorn | grep -v grep
+```
 
 ### Kill it (use the PID from before)
+```bash
 kill $(cat /tmp/llmproxy.pid)
+```
 
 ### Watch logs
+```bash
 tail -f /tmp/llmproxy.log

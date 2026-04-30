@@ -15,6 +15,8 @@ _config_path = Path("config.json")
 if _config_path.exists():
     _config = json.loads(_config_path.read_text())
 
+_LOG_DETAIL = _config.get("log_detail", "detailed")
+
 
 def get_ollama_base() -> str:
     return _config.get("ollama_base_url", "http://localhost:11434")
@@ -69,7 +71,26 @@ async def api_generate(request: Request):
         "input_tokens": estimate_tokens(body.get("prompt", "")),
         "output_tokens": 0,
         "error": None,
+        "_log_detail": _LOG_DETAIL,
     }
+
+    if _LOG_DETAIL in ("detailed", "full"):
+        params = {}
+        if "stream" in body:
+            params["stream"] = body["stream"]
+        if "options" in body:
+            params["options"] = body["options"]
+        if "template" in body:
+            params["template"] = body["template"]
+        if "system" in body:
+            params["system"] = body["system"]
+        if "context" in body:
+            params["context"] = body["context"]
+        if "images" in body:
+            params["images"] = body["images"]
+        if "tools" in body:
+            params["tools"] = body["tools"]
+        log_entry["request_params"] = params
 
     try:
         async with httpx.AsyncClient(timeout=120) as client:
@@ -79,6 +100,19 @@ async def api_generate(request: Request):
         log_entry["latency_ms"] = (time.time() - start) * 1000
         log_entry["response"] = data.get("response", "")
         log_entry["output_tokens"] = estimate_tokens(data.get("response", ""))
+
+        if _LOG_DETAIL in ("detailed", "full"):
+            metadata = {}
+            if "usage" in data:
+                metadata["usage"] = data["usage"]
+            if "done" in data:
+                metadata["done"] = data["done"]
+            if "done_reason" in data:
+                metadata["done_reason"] = data["done_reason"]
+            if "model" in data and data["model"] != log_entry["model"]:
+                metadata["response_model"] = data["model"]
+            log_entry["response_metadata"] = metadata
+
         write_log(log_entry)
         pretty_console_log(log_entry)
         return data
@@ -110,7 +144,20 @@ async def api_chat(request: Request):
         "input_tokens": sum(estimate_tokens(m.get("content", "")) for m in messages),
         "output_tokens": 0,
         "error": None,
+        "_log_detail": _LOG_DETAIL,
     }
+
+    if _LOG_DETAIL in ("detailed", "full"):
+        params = {}
+        if "stream" in body:
+            params["stream"] = body["stream"]
+        if "options" in body:
+            params["options"] = body["options"]
+        if "tools" in body:
+            params["tools"] = body["tools"]
+        if "tool_choice" in body:
+            params["tool_choice"] = body["tool_choice"]
+        log_entry["request_params"] = params
 
     try:
         async with httpx.AsyncClient(timeout=120) as client:
@@ -120,6 +167,17 @@ async def api_chat(request: Request):
         log_entry["latency_ms"] = (time.time() - start) * 1000
         log_entry["response"] = data.get("message", {}).get("content", "")
         log_entry["output_tokens"] = estimate_tokens(log_entry["response"])
+
+        if _LOG_DETAIL in ("detailed", "full"):
+            metadata = {}
+            if "usage" in data:
+                metadata["usage"] = data["usage"]
+            if "done" in data:
+                metadata["done"] = data["done"]
+            if "done_reason" in data:
+                metadata["done_reason"] = data["done_reason"]
+            log_entry["response_metadata"] = metadata
+
         write_log(log_entry)
         pretty_console_log(log_entry)
         return data
@@ -193,13 +251,41 @@ async def openai_chat(request: Request):
         ),
         "output_tokens": 0,
         "error": None,
+        "_log_detail": _LOG_DETAIL,
     }
+
+    if _LOG_DETAIL in ("detailed", "full"):
+        params = {}
+        if "max_tokens" in body:
+            params["max_tokens"] = body["max_tokens"]
+        if "temperature" in body:
+            params["temperature"] = body["temperature"]
+        if "top_p" in body:
+            params["top_p"] = body["top_p"]
+        if "frequency_penalty" in body:
+            params["frequency_penalty"] = body["frequency_penalty"]
+        if "presence_penalty" in body:
+            params["presence_penalty"] = body["presence_penalty"]
+        if "stream" in body:
+            params["stream"] = body["stream"]
+        if "tools" in body:
+            params["tools"] = body["tools"]
+        if "tool_choice" in body:
+            params["tool_choice"] = body["tool_choice"]
+        if "logit_bias" in body:
+            params["logit_bias"] = body["logit_bias"]
+        if "response_format" in body:
+            params["response_format"] = body["response_format"]
+        if "stream_options" in body:
+            params["stream_options"] = body["stream_options"]
+        log_entry["request_params"] = params
 
     ollama_url = f"{get_ollama_base()}/v1/chat/completions"
 
     if stream:
         async def generate_stream():
             accumulated_content = ""
+            accumulated_metadata = {}
             try:
                 async with httpx.AsyncClient(timeout=120) as client:
                     async with client.stream(
@@ -222,12 +308,25 @@ async def openai_chat(request: Request):
                                         accumulated_content += (
                                             choice.get("delta", {}).get("content") or ""
                                         )
+                                    if "usage" in chunk:
+                                        accumulated_metadata["usage"] = chunk["usage"]
+                                    if "model" in chunk:
+                                        accumulated_metadata["model"] = chunk["model"]
                                 except Exception:
                                     pass
 
                 log_entry["latency_ms"] = (time.time() - start) * 1000
                 log_entry["response"] = accumulated_content
                 log_entry["output_tokens"] = estimate_tokens(accumulated_content)
+
+                if _LOG_DETAIL in ("detailed", "full") and accumulated_metadata:
+                    entry_metadata = {}
+                    if "usage" in accumulated_metadata:
+                        entry_metadata["usage"] = accumulated_metadata["usage"]
+                    if "model" in accumulated_metadata:
+                        entry_metadata["response_model"] = accumulated_metadata["model"]
+                    log_entry["response_metadata"] = entry_metadata
+
                 write_log(log_entry)
                 pretty_console_log(log_entry)
 
@@ -263,10 +362,24 @@ async def openai_chat(request: Request):
 
             log_entry["latency_ms"] = (time.time() - start) * 1000
             content = ""
+            finish_reasons = []
             for choice in data.get("choices", []):
                 content += choice.get("message", {}).get("content") or ""
+                if "finish_reason" in choice:
+                    finish_reasons.append({"index": choice.get("index"), "finish_reason": choice["finish_reason"]})
             log_entry["response"] = content
             log_entry["output_tokens"] = estimate_tokens(content)
+
+            if _LOG_DETAIL in ("detailed", "full"):
+                metadata = {}
+                if "usage" in data:
+                    metadata["usage"] = data["usage"]
+                if finish_reasons:
+                    metadata["finish_reason"] = finish_reasons
+                if "model" in data and data["model"] != log_entry["model"]:
+                    metadata["response_model"] = data["model"]
+                log_entry["response_metadata"] = metadata
+
             write_log(log_entry)
             pretty_console_log(log_entry)
             return data
