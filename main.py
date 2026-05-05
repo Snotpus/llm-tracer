@@ -192,6 +192,32 @@ async def api_chat(request: Request):
 
 # ── OpenAI-compatible endpoints ───────────────────────────────────────────────
 
+@app.get("/api/version")
+async def api_version():
+    """Proxy Ollama's /api/version endpoint."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{get_ollama_base()}/api/version")
+            if resp.status_code == 200:
+                return resp.json()
+    except Exception:
+        pass
+    return {"error": "unable to reach Ollama"}, 502
+
+
+@app.get("/api/tags")
+async def api_tags():
+    """Proxy Ollama's /api/tags endpoint."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"{get_ollama_base()}/api/tags")
+            if resp.status_code == 200:
+                return resp.json()
+    except Exception:
+        pass
+    return {"error": "unable to reach Ollama"}, 502
+
+
 @app.get("/v1/models")
 async def list_models():
     """Proxy Ollama's model list in OpenAI format."""
