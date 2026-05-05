@@ -2,3 +2,4 @@
 *.jsonl
 .idea/
 .opencode/
+*.pyc
