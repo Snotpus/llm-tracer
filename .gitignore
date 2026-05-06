@@ -3,6 +3,7 @@
 .opencode/
 .vscode/
 
+config.json
 uv.lock
 *.jsonl
 *.pyc
