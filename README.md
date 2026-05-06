@@ -80,6 +80,21 @@ Resends a logged request to Ollama using the original parameters and prints a un
 
 Older log entries (from before `log_detail` was added) will show a warning but replay will still attempt using whatever fields are available.
 
+## TODO
+
+### Improve logged data storage for security
+
+Current implementation writes raw payloads (prompts, messages, responses, request bodies) directly to `logs.jsonl`, `sessions/`, and `db/traces.duckdb`. This creates leakage risk if the repo is shared, cloned, or accidentally committed.
+
+TODO: Add a safer storage layer. Options:
+
+- **Pre-commit hook** — block commits containing `*.jsonl`, `*.duckdb`, and `raw_body` fields
+- **Field-level redaction** — mask secrets (API keys, bearer tokens, system prompts) before writing logs
+- **On-demand payload access** — store only metadata by default, require `--full` flag for payloads (like sessions, replay, render)
+- **Encryption at rest** — encrypt logs with a key from config/env so accidental git commits are harmless
+
+Until this is done: never commit `logs.jsonl`, `sessions/*.jsonl`, or `db/*.duckdb`. They contain exactly what you sent to the LLM.
+
 ## Troubleshooting
 
 ### Find any python processes running fastapi/uvicorn
