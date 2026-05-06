@@ -1,6 +1,0 @@
-{
-    "ollama_base_url": "http://localhost:11434",
-    "log_path": "logs.jsonl",
-    "log_detail": "detailed",
-    "db_path": "db/traces.duckdb"
-}
