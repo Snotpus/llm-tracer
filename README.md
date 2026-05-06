@@ -23,7 +23,13 @@ Proxy listens on `0.0.0.0:8000`. Point your Ollama client to it instead of
 
 ## Config
 
-Edit `config.json`:
+Copy `config.example.json` to `config.json` and edit:
+
+```bash
+cp config.example.json config.json
+```
+
+Then edit `config.json`:
 
 ```json
 {
