@@ -10,10 +10,11 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 ## Config
 
-Edit config.json at the repo root. Three keys:
+Edit config.json at the repo root. Five keys:
 - ollama_base_url — upstream Ollama URL (default http://localhost:11434)
 - log_path — where requests are logged (default logs.jsonl)
 - log_detail — minimal, detailed, or full
+- db_path — DuckDB database path (default db/traces.duckdb, optional)
 
 Log detail controls what extra fields are written per request (request params,
 response metadata, raw body). full is the most replay-faithful.
@@ -51,13 +52,31 @@ python replay.py <request_id> --log-path /path/to/logs.jsonl
 
 Older log entries (no request_params) replay with only model + messages.
 
+### DB (db.py)
+
+DuckDB persistent storage for traces:
+
+python db.py init              # create DB file with schema
+python db.py import             # load JSONL logs into DB
+python db.py stats              # row count, date range, model list
+python db.py query "SQL..."     # execute and format SQL query as table
+python db.py analyze token      # tokens by model over time
+python db.py analyze latency    # latency percentile distribution
+python db.py analyze errors     # error rate by endpoint
+python db.py analyze model      # model comparison
+python db.py analyze endpoint   # endpoint distribution
+
+All five subcommands scan `config.json` for `db_path` (default `db/traces.duckdb`).
+`import` and `init` both create the `db/` directory if missing. Idempotent via `INSERT OR REPLACE`.
+
 ## Architecture
 
-4 flat Python files, no package structure:
+5 flat Python files, no package structure:
 
 main.py     — FastAPI proxy, app entrypoint (uvicorn main:app)
 replay.py   — standalone CLI: load JSONL, resend, diff
 sessions.py — standalone CLI: list/create/render/audit/export sessions
+db.py       — standalone CLI: init/import/analyze DB
 
 No subpackages, no migrations, no generated code.
 

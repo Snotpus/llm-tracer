@@ -26,6 +26,63 @@ def get_log_path() -> str:
     return _config.get("log_path", "logs.jsonl")
 
 
+def get_db_path() -> str | None:
+    db = _config.get("db_path", "")
+    if db and db.endswith(".duckdb"):
+        p = Path(db)
+        if not p.is_absolute():
+            p = Path.cwd() / p
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return str(p)
+    return None
+
+
+def write_db(log_entry: dict):
+    db_path = get_db_path()
+    if not db_path:
+        return
+    import duckdb
+    from datetime import datetime
+
+    conn = duckdb.connect(db_path)
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS traces (id TEXT PRIMARY KEY, endpoint TEXT, model TEXT, timestamp TIMESTAMP, latency_ms DOUBLE, input_tokens BIGINT, output_tokens BIGINT, messages JSON, prompt JSON, response TEXT, error TEXT, request_params JSON, response_metadata JSON, raw_body JSON, loaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_traces_endpoint ON traces(endpoint)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_traces_model ON traces(model)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_traces_timestamp ON traces(timestamp)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_traces_error ON traces(error) WHERE error IS NOT NULL")
+
+        ts = log_entry.get("timestamp")
+        if isinstance(ts, (int, float)):
+            ts = datetime.fromtimestamp(ts)
+
+        conn.execute(
+            """INSERT OR REPLACE INTO traces
+               (id, endpoint, model, timestamp, latency_ms, input_tokens,
+                output_tokens, messages, prompt, response, error,
+                request_params, response_metadata, raw_body)
+               VALUES (?,?,?,?,?, ?,?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                log_entry.get("id"),
+                log_entry.get("endpoint"),
+                log_entry.get("model"),
+                ts,
+                log_entry.get("latency_ms"),
+                log_entry.get("input_tokens"),
+                log_entry.get("output_tokens"),
+                json.dumps(log_entry.get("messages")) if log_entry.get("messages") is not None else None,
+                json.dumps(log_entry.get("prompt")) if log_entry.get("prompt") is not None else None,
+                log_entry.get("response"),
+                log_entry.get("error"),
+                json.dumps(log_entry.get("request_params")) if log_entry.get("request_params") is not None else None,
+                json.dumps(log_entry.get("response_metadata")) if log_entry.get("response_metadata") is not None else None,
+                log_entry.get("raw_body"),
+            ],
+        )
+    finally:
+        conn.close()
+
+
 def estimate_tokens(text: str) -> int:
     return len(text.split()) if text else 0
 
@@ -114,6 +171,7 @@ async def api_generate(request: Request):
             log_entry["response_metadata"] = metadata
 
         write_log(log_entry)
+        write_db(log_entry)
         pretty_console_log(log_entry)
         return data
 
@@ -121,6 +179,7 @@ async def api_generate(request: Request):
         log_entry["latency_ms"] = (time.time() - start) * 1000
         log_entry["error"] = str(e)
         write_log(log_entry)
+        write_db(log_entry)
         pretty_console_log(log_entry)
         return JSONResponse(status_code=502, content={"error": str(e)})
 
@@ -179,6 +238,7 @@ async def api_chat(request: Request):
             log_entry["response_metadata"] = metadata
 
         write_log(log_entry)
+        write_db(log_entry)
         pretty_console_log(log_entry)
         return data
 
@@ -186,6 +246,7 @@ async def api_chat(request: Request):
         log_entry["latency_ms"] = (time.time() - start) * 1000
         log_entry["error"] = str(e)
         write_log(log_entry)
+        write_db(log_entry)
         pretty_console_log(log_entry)
         return JSONResponse(status_code=502, content={"error": str(e)})
 
@@ -354,12 +415,14 @@ async def openai_chat(request: Request):
                     log_entry["response_metadata"] = entry_metadata
 
                 write_log(log_entry)
+                write_db(log_entry)
                 pretty_console_log(log_entry)
 
             except Exception as e:
                 log_entry["latency_ms"] = (time.time() - start) * 1000
                 log_entry["error"] = str(e)
                 write_log(log_entry)
+                write_db(log_entry)
                 pretty_console_log(log_entry)
                 error_data = json.dumps({"error": {"message": str(e), "type": "proxy_error"}})
                 yield f"data: {error_data}\n\n"
@@ -407,6 +470,7 @@ async def openai_chat(request: Request):
                 log_entry["response_metadata"] = metadata
 
             write_log(log_entry)
+            write_db(log_entry)
             pretty_console_log(log_entry)
             return data
 
@@ -414,6 +478,7 @@ async def openai_chat(request: Request):
             log_entry["latency_ms"] = (time.time() - start) * 1000
             log_entry["error"] = str(e)
             write_log(log_entry)
+            write_db(log_entry)
             pretty_console_log(log_entry)
             return JSONResponse(
                 status_code=502,
