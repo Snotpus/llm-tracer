@@ -2,6 +2,7 @@ import json
 import sys
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -9,6 +10,20 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 app = FastAPI(title="LLM Tracer Proxy", version="0.2.0")
+
+@app.on_event("startup")
+async def startup():
+    app.state.httpx_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(120.0, connect=10.0),
+        follow_redirects=True,
+    )
+
+@app.on_event("shutdown")
+async def shutdown():
+    await app.state.httpx_client.aclose()
+
+def _iso():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] + " UTC"
 
 _config = {}
 _config_path = Path("config.json")
@@ -50,7 +65,7 @@ def write_db(log_entry: dict):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_traces_endpoint ON traces(endpoint)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_traces_model ON traces(model)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_traces_timestamp ON traces(timestamp)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_traces_error ON traces(error) WHERE error IS NOT NULL")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_traces_error ON traces(error)")
 
         ts = log_entry.get("timestamp")
         if isinstance(ts, (int, float)):
@@ -97,7 +112,7 @@ def write_log(entry: dict):
 def pretty_console_log(entry: dict):
     status = "ERR" if entry.get("error") else "OK"
     print(
-        f"\n[{status}] req={entry.get('id')} model={entry.get('model')} "
+        f"\n[{_iso()}] [{status}] req={entry.get('id')} model={entry.get('model')} "
         f"latency={entry.get('latency_ms', 0):.0f}ms "
         f"input_tokens={entry.get('input_tokens', 0)} "
         f"output_tokens={entry.get('output_tokens', 0)}",
@@ -150,11 +165,12 @@ async def api_generate(request: Request):
         log_entry["request_params"] = params
 
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(f"{get_ollama_base()}/api/generate", json=body)
-            data = resp.json()
+        start_external = time.time()
+        resp = await app.state.httpx_client.post(f"{get_ollama_base()}/api/generate", json=body)
+        data = resp.json()
 
         log_entry["latency_ms"] = (time.time() - start) * 1000
+        log_entry["upstream_latency_ms"] = (time.time() - start_external) * 1000
         log_entry["response"] = data.get("response", "")
         log_entry["output_tokens"] = estimate_tokens(data.get("response", ""))
 
@@ -219,11 +235,12 @@ async def api_chat(request: Request):
         log_entry["request_params"] = params
 
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(f"{get_ollama_base()}/api/chat", json=body)
-            data = resp.json()
+        start_external = time.time()
+        resp = await app.state.httpx_client.post(f"{get_ollama_base()}/api/chat", json=body)
+        data = resp.json()
 
         log_entry["latency_ms"] = (time.time() - start) * 1000
+        log_entry["upstream_latency_ms"] = (time.time() - start_external) * 1000
         log_entry["response"] = data.get("message", {}).get("content", "")
         log_entry["output_tokens"] = estimate_tokens(log_entry["response"])
 
@@ -257,10 +274,9 @@ async def api_chat(request: Request):
 async def api_version():
     """Proxy Ollama's /api/version endpoint."""
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{get_ollama_base()}/api/version")
-            if resp.status_code == 200:
-                return resp.json()
+        resp = await app.state.httpx_client.get(f"{get_ollama_base()}/api/version", timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
     except Exception:
         pass
     return {"error": "unable to reach Ollama"}, 502
@@ -270,10 +286,9 @@ async def api_version():
 async def api_tags():
     """Proxy Ollama's /api/tags endpoint."""
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{get_ollama_base()}/api/tags")
-            if resp.status_code == 200:
-                return resp.json()
+        resp = await app.state.httpx_client.get(f"{get_ollama_base()}/api/tags", timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
     except Exception:
         pass
     return {"error": "unable to reach Ollama"}, 502
@@ -283,11 +298,10 @@ async def api_tags():
 async def list_models():
     """Proxy Ollama's model list in OpenAI format."""
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{get_ollama_base()}/api/tags")
-            if resp.status_code == 200:
-                models = resp.json().get("models", [])
-                return {
+        resp = await app.state.httpx_client.get(f"{get_ollama_base()}/api/tags", timeout=10)
+        if resp.status_code == 200:
+            models = resp.json().get("models", [])
+            return {
                     "object": "list",
                     "data": [
                         {
@@ -319,7 +333,7 @@ async def openai_chat(request: Request):
     stream = body.get("stream", False)
 
     print(
-        f"[DEBUG] /v1/chat/completions stream={stream} model={model} "
+        f"[{_iso()}] [DEBUG] /v1/chat/completions stream={stream} model={model} "
         f"tools={len(body.get('tools', []))} tool_choice={body.get('tool_choice')}",
         file=sys.stderr,
     )
@@ -373,34 +387,34 @@ async def openai_chat(request: Request):
         async def generate_stream():
             accumulated_content = ""
             accumulated_metadata = {}
+            stream_error = None
             try:
-                async with httpx.AsyncClient(timeout=120) as client:
-                    async with client.stream(
-                        "POST",
-                        ollama_url,
-                        json=body,
-                        headers={"Content-Type": "application/json"},
-                    ) as resp:
-                        async for line in resp.aiter_lines():
-                            if not line:
-                                continue
-                            # Forward the line as-is — Ollama already speaks SSE
-                            yield f"{line}\n\n"
+                async with app.state.httpx_client.stream(
+                    "POST",
+                    ollama_url,
+                    json=body,
+                    headers={"Content-Type": "application/json"},
+                ) as resp:
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        # Forward the line as-is — Ollama already speaks SSE
+                        yield f"{line}\n\n"
 
-                            # Accumulate content for logging
-                            if line.startswith("data: ") and line != "data: [DONE]":
-                                try:
-                                    chunk = json.loads(line[6:])
-                                    for choice in chunk.get("choices", []):
-                                        accumulated_content += (
-                                            choice.get("delta", {}).get("content") or ""
-                                        )
-                                    if "usage" in chunk:
-                                        accumulated_metadata["usage"] = chunk["usage"]
-                                    if "model" in chunk:
-                                        accumulated_metadata["model"] = chunk["model"]
-                                except Exception:
-                                    pass
+                        # Accumulate content for logging
+                        if line.startswith("data: ") and line != "data: [DONE]":
+                            try:
+                                chunk = json.loads(line[6:])
+                                for choice in chunk.get("choices", []):
+                                    accumulated_content += (
+                                        choice.get("delta", {}).get("content") or ""
+                                    )
+                                if "usage" in chunk:
+                                    accumulated_metadata["usage"] = chunk["usage"]
+                                if "model" in chunk:
+                                    accumulated_metadata["model"] = chunk["model"]
+                            except Exception:
+                                pass
 
                 log_entry["latency_ms"] = (time.time() - start) * 1000
                 log_entry["response"] = accumulated_content
@@ -419,12 +433,13 @@ async def openai_chat(request: Request):
                 pretty_console_log(log_entry)
 
             except Exception as e:
+                stream_err = str(e)
                 log_entry["latency_ms"] = (time.time() - start) * 1000
-                log_entry["error"] = str(e)
+                log_entry["error"] = stream_err
                 write_log(log_entry)
                 write_db(log_entry)
                 pretty_console_log(log_entry)
-                error_data = json.dumps({"error": {"message": str(e), "type": "proxy_error"}})
+                error_data = json.dumps({"error": {"message": stream_err, "type": "proxy_error"}})
                 yield f"data: {error_data}\n\n"
                 yield "data: [DONE]\n\n"
 
@@ -441,13 +456,12 @@ async def openai_chat(request: Request):
     else:
         # Non-streaming: forward and return directly
         try:
-            async with httpx.AsyncClient(timeout=120) as client:
-                resp = await client.post(
-                    ollama_url,
-                    json=body,
-                    headers={"Content-Type": "application/json"},
-                )
-                data = resp.json()
+            resp = await app.state.httpx_client.post(
+                ollama_url,
+                json=body,
+                headers={"Content-Type": "application/json"},
+            )
+            data = resp.json()
 
             log_entry["latency_ms"] = (time.time() - start) * 1000
             content = ""
