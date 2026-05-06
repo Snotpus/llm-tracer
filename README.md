@@ -39,6 +39,27 @@ Edit `config.json`:
 - **`detailed`** (default) — all of the above plus `request_params` (temperature, max_tokens, tools, stream, etc.) and `response_metadata` (usage tokens, finish_reason)
 - **`full`** — everything in `detailed` plus the full request body for perfect replay fidelity
 
+## DB (Traces & Analytics)
+
+DuckDB persistent storage for request traces:
+
+```bash
+python db.py init              # create DB file with schema
+python db.py import             # load JSONL logs into DB
+python db.py stats              # row count, date range, model list
+python db.py query "SQL..."     # execute and format SQL query as table
+
+# Analytics subcommands (scan config.json for db_path)
+python db.py analyze token      # tokens by model over time
+python db.py analyze latency    # latency percentile distribution
+python db.py analyze errors     # error rate by endpoint
+python db.py analyze model      # model comparison
+python db.py analyze endpoint   # endpoint distribution
+```
+
+All subcommands use `db_path` from `config.json` (default `db/traces.duckdb`).
+`import` and `init` create `db/` if missing. Idempotent via `INSERT OR REPLACE`.
+
 ## Sessions (Conversation Recreation)
 
 Capture, export, render, and audit conversations from the raw request log.
