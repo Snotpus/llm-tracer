@@ -27,9 +27,10 @@ Edit `config.json`:
 
 ```json
 {
-    "ollama_base_url": "http://127.0.0.1:11434",
+    "ollama_base_url": "http://localhost:11434",
     "log_path": "logs.jsonl",
-    "log_detail": "detailed"
+    "log_detail": "detailed",
+    "db_path": "db/traces.duckdb"
 }
 ```
 
@@ -118,58 +119,26 @@ Until this is done: never commit `logs.jsonl`, `sessions/*.jsonl`, or `db/*.duck
 
 ## Troubleshooting
 
-### Find any python processes running fastapi/uvicorn
+### Is the proxy responding?
 ```bash
-ps aux | grep -E "(uvicorn|fastapi|proxy)" | grep -v grep
-```
-
-### Or more broadly, python processes
-```bash
-ps aux | grep python | grep -v grep
-```
-
-### See all listening ports with the process name
-```bash
-lsof -i -P -n | grep LISTEN
-```
-
-### Check a specific port (e.g. 8000, 11434 for ollama)
-```bash
-lsof -i :8000
-lsof -i :11434
-```
-
-### See active network connections
-```bash
-lsof -i -P -n | grep LISTEN
-```
-
-### Or watch connections in real time
-```bash
-watch -n 1 "lsof -i -P -n | grep LISTEN"
-```
-
-### Is your proxy responding at all?
-```bash
-curl -s http://localhost:8000/
 curl -s http://localhost:8000/v1/models
 ```
 
-### Test if ollama itself is reachable directly
+### Is Ollama responding?
 ```bash
 curl -s http://localhost:11434/api/tags
 ```
 
-### Run your proxy with output visible
+### Is the proxy listening / running?
 ```bash
-uvicorn main:app --host 0.0.0.0 --port 8000 --log-level debug
+lsof -i :8000
+ps aux | grep uvicorn | grep -v grep
 ```
 
-### Watch logs live
+### Watch logs
 ```bash
-tail -f /tmp/llmproxy.log
-lsof -i :8000                # is it actually listening?
-ps aux | grep uvicorn        # is the process alive?
+tail -f logs.jsonl           # request logs
+tail -f /tmp/llmproxy.log    # proxy stdout (from deployment)
 ```
 
 ## Persistent deployment
@@ -258,9 +227,3 @@ kill $(cat /tmp/llmproxy.pid)
 ```bash
 tail -f /tmp/llmproxy.log
 ```
-
-## Config Locations:
-- OpenCode: ~/.config/opencode/config.json
-- Proxy (this project): ~/Projects/llm-tracer/config.json
-- ollama plist (not used atm...): ~/Library/LaunchAgents/ollama.keepalive.plist
-- 
