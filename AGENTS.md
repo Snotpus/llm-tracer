@@ -1,5 +1,10 @@
 # llm-tracer — agent instructions
 
+## Runtime data files
+logs.jsonl, sessions/, and db/ are runtime data files, not source code.
+- Never read logs.jsonl or session/ files in full — they can be very large
+- Use `head` or `tail` to sample them if needed for context
+
 ## Setup & run
 
 pip install -e .            # install from pyproject.toml
